@@ -6,9 +6,14 @@ const ffmpeg = require('fluent-ffmpeg');
 const { getDb } = require('./db');
 const { calculateRawVideoDuration, processVideo, mergeVideos } = require('./videoProcessing');
 const { authenticateToken } = require('./middleware/auth');
+const swaggerUi = require('swagger-ui-express');
+const specs = require('./swagger');
 
 const app = express();
 app.use(express.json());
+
+// Serve Swagger documentation
+app.use('/api-docs', swaggerUi.serve, swaggerUi.setup(specs));
 
 // Configure multer for handling file uploads
 const storage = multer.diskStorage({
@@ -62,7 +67,43 @@ const handleUploadError = (err, req, res, next) => {
     next();
 };
 
-// Upload endpoint
+/**
+ * @swagger
+ * /upload:
+ *   post:
+ *     summary: Upload a new video file
+ *     tags: [Videos]
+ *     security:
+ *       - bearerAuth: []
+ *     requestBody:
+ *       required: true
+ *       content:
+ *         multipart/form-data:
+ *           schema:
+ *             type: object
+ *             properties:
+ *               video:
+ *                 type: string
+ *                 format: binary
+ *                 description: Video file to upload
+ *     responses:
+ *       200:
+ *         description: Video uploaded successfully
+ *         content:
+ *           application/json:
+ *             schema:
+ *               $ref: '#/components/schemas/Video'
+ *       400:
+ *         description: Invalid request
+ *         content:
+ *           application/json:
+ *             schema:
+ *               $ref: '#/components/schemas/Error'
+ *       401:
+ *         description: Unauthorized
+ *       403:
+ *         description: Invalid authentication token
+ */
 app.post('/upload', authenticateToken, upload.single('video'), handleUploadError, async (req, res) => {
     try {
         if (!req.file) {
@@ -111,7 +152,54 @@ app.post('/upload', authenticateToken, upload.single('video'), handleUploadError
     }
 });
 
-// Video trimming endpoint
+/**
+ * @swagger
+ * /videos/{id}/trim:
+ *   post:
+ *     summary: Trim a video
+ *     tags: [Videos]
+ *     security:
+ *       - bearerAuth: []
+ *     parameters:
+ *       - in: path
+ *         name: id
+ *         required: true
+ *         schema:
+ *           type: integer
+ *         description: Video ID
+ *     requestBody:
+ *       required: true
+ *       content:
+ *         application/json:
+ *           schema:
+ *             type: object
+ *             properties:
+ *               trimStart:
+ *                 type: number
+ *                 description: Seconds to trim from start
+ *               trimEnd:
+ *                 type: number
+ *                 description: Seconds to trim from end
+ *     responses:
+ *       200:
+ *         description: Video trimmed successfully
+ *         content:
+ *           application/json:
+ *             schema:
+ *               $ref: '#/components/schemas/Video'
+ *       400:
+ *         description: Invalid request
+ *         content:
+ *           application/json:
+ *             schema:
+ *               $ref: '#/components/schemas/Error'
+ *       401:
+ *         description: Unauthorized
+ *       403:
+ *         description: Invalid authentication token
+ *       404:
+ *         description: Video not found
+ */
 app.post('/videos/:id/trim', authenticateToken, async (req, res) => {
     try {
         const { trimStart, trimEnd } = req.body;
@@ -164,7 +252,46 @@ app.post('/videos/:id/trim', authenticateToken, async (req, res) => {
     }
 });
 
-// Video merging endpoint
+/**
+ * @swagger
+ * /videos/merge:
+ *   post:
+ *     summary: Merge multiple videos
+ *     tags: [Videos]
+ *     security:
+ *       - bearerAuth: []
+ *     requestBody:
+ *       required: true
+ *       content:
+ *         application/json:
+ *           schema:
+ *             type: object
+ *             properties:
+ *               videoIds:
+ *                 type: array
+ *                 items:
+ *                   type: integer
+ *                 description: Array of video IDs to merge
+ *     responses:
+ *       200:
+ *         description: Videos merged successfully
+ *         content:
+ *           application/json:
+ *             schema:
+ *               $ref: '#/components/schemas/Video'
+ *       400:
+ *         description: Invalid request
+ *         content:
+ *           application/json:
+ *             schema:
+ *               $ref: '#/components/schemas/Error'
+ *       401:
+ *         description: Unauthorized
+ *       403:
+ *         description: Invalid authentication token
+ *       404:
+ *         description: One or more videos not found
+ */
 app.post('/videos/merge', authenticateToken, async (req, res) => {
     try {
         const { videoIds } = req.body;
@@ -215,7 +342,44 @@ app.post('/videos/merge', authenticateToken, async (req, res) => {
     }
 });
 
-// Share video endpoint
+/**
+ * @swagger
+ * /videos/{id}/share:
+ *   post:
+ *     summary: Create a share link for a video
+ *     tags: [Videos]
+ *     security:
+ *       - bearerAuth: []
+ *     parameters:
+ *       - in: path
+ *         name: id
+ *         required: true
+ *         schema:
+ *           type: integer
+ *         description: Video ID
+ *     requestBody:
+ *       content:
+ *         application/json:
+ *           schema:
+ *             type: object
+ *             properties:
+ *               expiryHours:
+ *                 type: integer
+ *                 description: Hours until link expires (default 24)
+ *     responses:
+ *       200:
+ *         description: Share link created successfully
+ *         content:
+ *           application/json:
+ *             schema:
+ *               $ref: '#/components/schemas/ShareLink'
+ *       401:
+ *         description: Unauthorized
+ *       403:
+ *         description: Invalid authentication token
+ *       404:
+ *         description: Video not found
+ */
 app.post('/videos/:id/share', authenticateToken, async (req, res) => {
     try {
         const videoId = req.params.id;
@@ -253,7 +417,30 @@ app.post('/videos/:id/share', authenticateToken, async (req, res) => {
     }
 });
 
-// Get shared video endpoint
+/**
+ * @swagger
+ * /videos/share/{token}:
+ *   get:
+ *     summary: Access a shared video
+ *     tags: [Videos]
+ *     parameters:
+ *       - in: path
+ *         name: token
+ *         required: true
+ *         schema:
+ *           type: string
+ *         description: Share token
+ *     responses:
+ *       200:
+ *         description: Video stream
+ *         content:
+ *           video/raw:
+ *             schema:
+ *               type: string
+ *               format: binary
+ *       404:
+ *         description: Share link not found or expired
+ */
 app.get('/videos/share/:token', async (req, res) => {
     try {
         const token = req.params.token;
