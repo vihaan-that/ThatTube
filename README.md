@@ -215,3 +215,19 @@ The server will start on port 3000 (configurable via PORT environment variable).
 ## License
 
 This project is licensed under the MIT License - see the LICENSE file for details.
+
+## Test Files
+
+Download the test video files from [Drive Link] and place them in the `tests/fixtures` directory:
+- test-video.raw (5 seconds)
+- test-video1.raw (5 seconds)
+- test-video2.raw (5 seconds)
+- long-video.raw (6 minutes)
+
+Or generate them using the following commands:
+```bash
+cd tests/fixtures
+dd if=/dev/zero of=test-video1.raw bs=230400 count=150
+dd if=/dev/zero of=test-video2.raw bs=230400 count=150
+dd if=/dev/zero of=test-video.raw bs=230400 count=150
+dd if=/dev/zero of=long-video.raw bs=230400 count=10800

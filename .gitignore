@@ -1,1 +1,30 @@
-node_modules/*
+# Dependencies
+node_modules/
+package-lock.json
+
+# Environment variables
+.env
+
+# IDE files
+.vscode/
+.idea/
+
+# Build output
+dist/
+build/
+
+# Logs
+*.log
+npm-debug.log*
+
+# Test coverage
+coverage/
+
+# Video files
+*.raw
+uploads/
+tests/fixtures/*.raw
+
+# OS files
+.DS_Store
+Thumbs.db
