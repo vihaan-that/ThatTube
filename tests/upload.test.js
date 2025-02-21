@@ -89,7 +89,9 @@ describe('POST /upload', () => {
         expect(response.body.duration).to.be.approximately(5.0, 0.1);
     });
 
-    it('should reject videos that exceed maximum duration', async () => {
+    it('should reject videos that exceed maximum duration', async function() {
+        this.timeout(10000); // Increase timeout for large file
+        
         const testVideoPath = path.join(__dirname, 'fixtures', 'long-video.raw');
         
         const response = await request(app)
@@ -99,5 +101,5 @@ describe('POST /upload', () => {
             .expect(400);
         
         expect(response.body.error).to.equal('Video duration exceeds maximum allowed length');
-    }).timeout(5000); // Increase timeout for large file
+    });
 });

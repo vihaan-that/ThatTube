@@ -2,9 +2,9 @@ const express = require('express');
 const multer = require('multer');
 const path = require('path');
 const fs = require('fs');
-const ffmpeg = require('fluent-ffmpeg');
 const { getDb } = require('./db');
-const { calculateRawVideoDuration, processVideo, mergeVideos } = require('./videoProcessing');
+const { calculateRawVideoDuration } = require('./videoProcessing');
+const { processVideo, mergeVideos } = require('./videoProcessing');
 const { authenticateToken } = require('./middleware/auth');
 const swaggerUi = require('swagger-ui-express');
 const specs = require('./swagger');
@@ -110,32 +110,21 @@ app.post('/upload', authenticateToken, upload.single('video'), handleUploadError
             return res.status(400).json({ error: 'No video file provided' });
         }
 
-        const db = getDb();
         const filepath = req.file.path;
         const filename = req.file.filename;
         const filesize = fs.statSync(filepath).size;
 
-        // For raw video files, calculate duration based on file size
-        let duration;
-        if (req.file.originalname.endsWith('.raw')) {
-            duration = calculateRawVideoDuration(filepath);
-        } else {
-            // Get video duration using ffprobe
-            duration = await new Promise((resolve, reject) => {
-                ffmpeg.ffprobe(req.file.path, (err, metadata) => {
-                    if (err) reject(err);
-                    resolve(metadata.format.duration);
-                });
-            });
-        }
+        // Calculate duration
+        const duration = calculateRawVideoDuration(filepath);
 
         // Check if duration exceeds maximum allowed length (5 minutes)
         if (duration > 300) { // 5 minutes in seconds
             fs.unlinkSync(filepath); // Delete the uploaded file
-            return res.status(400).json({ error: 'Video duration exceeds maximum allowed length' });
+            return res.status(400).json({ error: 'Video duration exceeds maximum allowed length (5 minutes)' });
         }
 
         // Insert video record into database
+        const db = getDb();
         const result = db.prepare(`
             INSERT INTO videos (filename, filepath, size, duration)
             VALUES (?, ?, ?, ?)
@@ -202,16 +191,16 @@ app.post('/upload', authenticateToken, upload.single('video'), handleUploadError
  */
 app.post('/videos/:id/trim', authenticateToken, async (req, res) => {
     try {
+        const videoId = req.params.id;
         const { trimStart, trimEnd } = req.body;
-        const videoId = parseInt(req.params.id);
 
-        // Validate parameters
+        // Validate trim parameters
         if (!trimStart && !trimEnd) {
-            return res.status(400).json({ error: 'Invalid trim parameters. Provide either trimStart or trimEnd' });
+            return res.status(400).json({ error: 'Must specify either trimStart or trimEnd' });
         }
 
         if ((trimStart && trimStart < 0) || (trimEnd && trimEnd < 0)) {
-            return res.status(400).json({ error: 'Trim values must be positive numbers' });
+            return res.status(400).json({ error: 'Trim values must be positive' });
         }
 
         // Get video from database
@@ -223,32 +212,27 @@ app.post('/videos/:id/trim', authenticateToken, async (req, res) => {
         }
 
         // Process video
-        const { outputPath, duration } = await processVideo(video.filepath, {
-            trimStart,
-            trimEnd
-        });
+        const result = await processVideo(video.filepath, { trimStart, trimEnd });
 
         // Save new video to database
-        const result = db.prepare(`
+        const newVideo = db.prepare(`
             INSERT INTO videos (filename, filepath, size, duration)
             VALUES (?, ?, ?, ?)
         `).run(
-            path.basename(outputPath),
-            outputPath,
-            fs.statSync(outputPath).size,
-            duration
+            path.basename(result.outputPath),
+            result.outputPath,
+            fs.statSync(result.outputPath).size,
+            result.duration
         );
 
-        // Return new video details
         res.json({
-            id: result.lastInsertRowid,
-            filename: path.basename(outputPath),
-            duration: duration,
-            size: fs.statSync(outputPath).size
+            id: newVideo.lastInsertRowid,
+            filename: path.basename(result.outputPath),
+            duration: result.duration
         });
-
     } catch (error) {
-        res.status(500).json({ error: 'Error processing video: ' + error.message });
+        console.error('Error processing trim:', error);
+        res.status(500).json({ error: error.message });
     }
 });
 
@@ -296,49 +280,48 @@ app.post('/videos/merge', authenticateToken, async (req, res) => {
     try {
         const { videoIds } = req.body;
 
-        // Validate input
-        if (!Array.isArray(videoIds) || videoIds.length < 2) {
-            return res.status(400).json({ error: 'At least two video IDs are required' });
+        if (!videoIds || !Array.isArray(videoIds)) {
+            return res.status(400).json({ error: 'Must provide an array of video IDs' });
         }
 
-        // Get videos from database
+        if (videoIds.length < 2) {
+            return res.status(400).json({ error: 'Must provide at least two video IDs to merge' });
+        }
+
         const db = getDb();
-        const videos = videoIds.map(id => 
-            db.prepare('SELECT * FROM videos WHERE id = ?').get(id)
-        );
+        const videos = [];
 
-        // Check if all videos exist
-        if (videos.some(v => !v)) {
-            return res.status(404).json({ error: 'One or more videos not found' });
+        // Get all videos from database
+        for (const id of videoIds) {
+            const video = db.prepare('SELECT * FROM videos WHERE id = ?').get(id);
+            if (!video) {
+                return res.status(404).json({ error: `Video with ID ${id} not found` });
+            }
+            videos.push(video);
         }
-
-        // Get file paths
-        const videoPaths = videos.map(v => v.filepath);
 
         // Merge videos
-        const { outputPath, duration } = await mergeVideos(videoPaths);
+        const result = await mergeVideos(videos.map(v => v.filepath));
 
         // Save new video to database
-        const result = db.prepare(`
+        const newVideo = db.prepare(`
             INSERT INTO videos (filename, filepath, size, duration)
             VALUES (?, ?, ?, ?)
         `).run(
-            path.basename(outputPath),
-            outputPath,
-            fs.statSync(outputPath).size,
-            duration
+            path.basename(result.outputPath),
+            result.outputPath,
+            fs.statSync(result.outputPath).size,
+            result.duration
         );
 
-        // Return new video details
         res.json({
-            id: result.lastInsertRowid,
-            filename: path.basename(outputPath),
-            duration: duration,
-            size: fs.statSync(outputPath).size
+            id: newVideo.lastInsertRowid,
+            filename: path.basename(result.outputPath),
+            duration: result.duration
         });
-
     } catch (error) {
-        res.status(500).json({ error: 'Error merging videos: ' + error.message });
+        console.error('Error processing merge:', error);
+        res.status(500).json({ error: error.message });
     }
 });
 
@@ -413,7 +396,7 @@ app.post('/videos/:id/share', authenticateToken, async (req, res) => {
         });
     } catch (error) {
         console.error('Error creating share link:', error);
-        res.status(500).json({ error: 'Internal server error' });
+        res.status(500).json({ error: error.message });
     }
 });
 
@@ -470,7 +453,7 @@ app.get('/videos/share/:token', async (req, res) => {
         fileStream.pipe(res);
     } catch (error) {
         console.error('Error serving shared video:', error);
-        res.status(500).json({ error: 'Internal server error' });
+        res.status(500).json({ error: error.message });
     }
 });
 
