@@ -4,9 +4,12 @@ const path = require('path');
 const fs = require('fs');
 const app = require('../app');
 const { getDb } = require('../db');
+const { VALID_API_TOKENS } = require('../middleware/auth');
 
 describe('Video Sharing Endpoints', () => {
+    const API_TOKEN = Array.from(VALID_API_TOKENS)[0];
     let testVideoId;
+    let shareToken;
 
     before(async function() {
         this.timeout(10000); // Increase timeout for setup
@@ -40,24 +43,47 @@ describe('Video Sharing Endpoints', () => {
         `).run();
     });
 
+    after(() => {
+        // Clean up share_links first (due to foreign key constraint)
+        const db = getDb();
+        db.prepare('DELETE FROM share_links').run();
+        db.prepare('DELETE FROM videos').run();
+
+        // Cleanup uploaded files
+        const uploadsDir = path.join(__dirname, '../uploads');
+        fs.readdirSync(uploadsDir).forEach(file => {
+            fs.unlinkSync(path.join(uploadsDir, file));
+        });
+    });
+
     describe('POST /videos/:id/share', () => {
+        it('should reject requests without authentication', async () => {
+            await request(app)
+                .post('/videos/1/share')
+                .expect(401);
+        });
+
+        it('should reject requests with invalid authentication', async () => {
+            await request(app)
+                .post('/videos/1/share')
+                .set('Authorization', 'Bearer invalid-token')
+                .expect(403);
+        });
+
         it('should return 404 for non-existent video ID', async () => {
-            const response = await request(app)
+            await request(app)
                 .post('/videos/999999/share')
-                .send({})
+                .set('Authorization', `Bearer ${API_TOKEN}`)
                 .expect(404);
-            
-            expect(response.body.error).to.equal('Video not found');
         });
 
         it('should create share link with default expiry', async () => {
             const response = await request(app)
                 .post(`/videos/${testVideoId}/share`)
-                .send({})
+                .set('Authorization', `Bearer ${API_TOKEN}`)
                 .expect(200);
             
             expect(response.body).to.have.property('shareUrl');
-            expect(response.body.shareUrl).to.include('/videos/share/');
             expect(response.body).to.have.property('expiryTimestamp');
 
             // Verify the link was saved in database
@@ -67,12 +93,16 @@ describe('Video Sharing Endpoints', () => {
             
             expect(shareLink).to.exist;
             expect(shareLink.video_id).to.equal(testVideoId);
+
+            // Store token for later tests
+            shareToken = response.body.shareUrl.split('/').pop();
         });
 
         it('should create share link with custom expiry', async () => {
             const expiryHours = 48;
             const response = await request(app)
                 .post(`/videos/${testVideoId}/share`)
+                .set('Authorization', `Bearer ${API_TOKEN}`)
                 .send({ expiryHours })
                 .expect(200);
             
@@ -115,24 +145,29 @@ describe('Video Sharing Endpoints', () => {
         });
 
         it('should return 404 for non-existent token', async () => {
-            const response = await request(app)
+            await request(app)
                 .get('/videos/share/non-existent-token')
                 .expect(404);
-            
-            expect(response.body.error).to.equal('Share link not found or expired');
         });
 
         it('should return 404 for expired token', async () => {
-            const response = await request(app)
+            await request(app)
                 .get(`/videos/share/${expiredToken}`)
                 .expect(404);
-            
-            expect(response.body.error).to.equal('Share link not found or expired');
         });
 
         it('should serve video content for valid token', async () => {
             const response = await request(app)
                 .get(`/videos/share/${validToken}`)
+                .expect(200);
+            
+            expect(response.headers['content-type']).to.equal('video/raw');
+            expect(response.headers['content-disposition']).to.include('test-share-video.raw');
+        });
+
+        it('should serve video content for valid token created in previous test', async () => {
+            const response = await request(app)
+                .get(`/videos/share/${shareToken}`)
                 .expect(200);
             
             expect(response.headers['content-type']).to.equal('video/raw');

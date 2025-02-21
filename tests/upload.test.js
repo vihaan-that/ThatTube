@@ -4,8 +4,11 @@ const path = require('path');
 const fs = require('fs');
 const app = require('../app');
 const { getDb } = require('../db');
+const { VALID_API_TOKENS } = require('../middleware/auth');
 
 describe('POST /upload', () => {
+    const API_TOKEN = Array.from(VALID_API_TOKENS)[0];
+
     before(() => {
         // Create uploads directory if it doesn't exist
         const uploadsDir = path.join(__dirname, '../uploads');
@@ -24,9 +27,27 @@ describe('POST /upload', () => {
         });
     });
 
+    it('should reject requests without authentication', async () => {
+        const response = await request(app)
+            .post('/upload')
+            .expect(401);
+        
+        expect(response.body.error).to.equal('No authentication token provided');
+    });
+
+    it('should reject requests with invalid authentication', async () => {
+        const response = await request(app)
+            .post('/upload')
+            .set('Authorization', 'Bearer invalid-token')
+            .expect(403);
+        
+        expect(response.body.error).to.equal('Invalid authentication token');
+    });
+
     it('should reject when no file is provided', async () => {
         const response = await request(app)
             .post('/upload')
+            .set('Authorization', `Bearer ${API_TOKEN}`)
             .expect(400);
         
         expect(response.body.error).to.equal('No video file provided');
@@ -40,6 +61,7 @@ describe('POST /upload', () => {
         try {
             const response = await request(app)
                 .post('/upload')
+                .set('Authorization', `Bearer ${API_TOKEN}`)
                 .attach('video', textFilePath, { filename: 'test.txt', contentType: 'text/plain' })
                 .expect(400);
             
@@ -57,6 +79,7 @@ describe('POST /upload', () => {
         
         const response = await request(app)
             .post('/upload')
+            .set('Authorization', `Bearer ${API_TOKEN}`)
             .attach('video', testVideoPath, { filename: 'test-video1.raw', contentType: 'video/raw' })
             .expect(200);
         
@@ -71,6 +94,7 @@ describe('POST /upload', () => {
         
         const response = await request(app)
             .post('/upload')
+            .set('Authorization', `Bearer ${API_TOKEN}`)
             .attach('video', testVideoPath, { filename: 'long-video.raw', contentType: 'video/raw' })
             .expect(400);
         

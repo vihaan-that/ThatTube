@@ -5,6 +5,7 @@ const fs = require('fs');
 const ffmpeg = require('fluent-ffmpeg');
 const { getDb } = require('./db');
 const { calculateRawVideoDuration, processVideo, mergeVideos } = require('./videoProcessing');
+const { authenticateToken } = require('./middleware/auth');
 
 const app = express();
 app.use(express.json());
@@ -62,7 +63,7 @@ const handleUploadError = (err, req, res, next) => {
 };
 
 // Upload endpoint
-app.post('/upload', upload.single('video'), handleUploadError, async (req, res) => {
+app.post('/upload', authenticateToken, upload.single('video'), handleUploadError, async (req, res) => {
     try {
         if (!req.file) {
             return res.status(400).json({ error: 'No video file provided' });
@@ -111,7 +112,7 @@ app.post('/upload', upload.single('video'), handleUploadError, async (req, res) 
 });
 
 // Video trimming endpoint
-app.post('/videos/:id/trim', async (req, res) => {
+app.post('/videos/:id/trim', authenticateToken, async (req, res) => {
     try {
         const { trimStart, trimEnd } = req.body;
         const videoId = parseInt(req.params.id);
@@ -164,7 +165,7 @@ app.post('/videos/:id/trim', async (req, res) => {
 });
 
 // Video merging endpoint
-app.post('/videos/merge', async (req, res) => {
+app.post('/videos/merge', authenticateToken, async (req, res) => {
     try {
         const { videoIds } = req.body;
 
@@ -215,7 +216,7 @@ app.post('/videos/merge', async (req, res) => {
 });
 
 // Share video endpoint
-app.post('/videos/:id/share', async (req, res) => {
+app.post('/videos/:id/share', authenticateToken, async (req, res) => {
     try {
         const videoId = req.params.id;
         const { expiryHours = 24 } = req.body; // Default 24 hours expiry

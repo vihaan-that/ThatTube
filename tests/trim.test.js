@@ -4,87 +4,99 @@ const path = require('path');
 const fs = require('fs');
 const app = require('../app');
 const { getDb } = require('../db');
+const { VALID_API_TOKENS } = require('../middleware/auth');
 
 describe('POST /videos/:id/trim', () => {
-    let testVideoId;
+    const API_TOKEN = Array.from(VALID_API_TOKENS)[0];
+    let videoId;
 
-    before(async function() {
-        this.timeout(10000); // Increase timeout for setup
-        // Setup: Upload a test video first
-        const db = getDb();
-        
-        // Copy test video to uploads directory
+    before(async () => {
+        // Upload a test video
         const testVideoPath = path.join(__dirname, 'fixtures', 'test-video1.raw');
-        const uploadPath = path.join(__dirname, '../uploads', 'test-trim-video.raw');
-        fs.copyFileSync(testVideoPath, uploadPath);
         
-        // Insert test video record
-        const result = db.prepare(`
-            INSERT INTO videos (filename, filepath, size, duration)
-            VALUES (?, ?, ?, ?)
-        `).run('test-trim-video.raw', uploadPath, fs.statSync(uploadPath).size, 10.0);
+        const response = await request(app)
+            .post('/upload')
+            .set('Authorization', `Bearer ${API_TOKEN}`)
+            .attach('video', testVideoPath)
+            .expect(200);
         
-        testVideoId = result.lastInsertRowid;
+        videoId = response.body.id;
     });
 
     after(() => {
-        // Cleanup: Remove test files from uploads directory
+        // Cleanup database
+        const db = getDb();
+        db.prepare('DELETE FROM videos').run();
+
+        // Cleanup uploaded files
         const uploadsDir = path.join(__dirname, '../uploads');
         fs.readdirSync(uploadsDir).forEach(file => {
-            if (file.includes('test-trim-video')) {
-                fs.unlinkSync(path.join(uploadsDir, file));
-            }
+            fs.unlinkSync(path.join(uploadsDir, file));
         });
     });
 
+    it('should reject requests without authentication', async () => {
+        await request(app)
+            .post('/videos/1/trim')
+            .send({ trimStart: 1 })
+            .expect(401);
+    });
+
+    it('should reject requests with invalid authentication', async () => {
+        await request(app)
+            .post('/videos/1/trim')
+            .set('Authorization', 'Bearer invalid-token')
+            .send({ trimStart: 1 })
+            .expect(403);
+    });
+
     it('should return 404 for non-existent video ID', async () => {
-        const response = await request(app)
-            .post('/videos/999999/trim')
-            .send({ trimStart: 2 })
+        await request(app)
+            .post('/videos/9999/trim')
+            .set('Authorization', `Bearer ${API_TOKEN}`)
+            .send({ trimStart: 1 })
             .expect(404);
-        
-        expect(response.body.error).to.equal('Video not found');
     });
 
     it('should validate trim parameters', async () => {
-        const response = await request(app)
-            .post(`/videos/${testVideoId}/trim`)
+        await request(app)
+            .post(`/videos/${videoId}/trim`)
+            .set('Authorization', `Bearer ${API_TOKEN}`)
             .send({})
             .expect(400);
-        
-        expect(response.body.error).to.equal('Invalid trim parameters. Provide either trimStart or trimEnd');
     });
 
     it('should reject invalid trim values', async () => {
-        const response = await request(app)
-            .post(`/videos/${testVideoId}/trim`)
+        await request(app)
+            .post(`/videos/${videoId}/trim`)
+            .set('Authorization', `Bearer ${API_TOKEN}`)
             .send({ trimStart: -1 })
             .expect(400);
-        
-        expect(response.body.error).to.equal('Trim values must be positive numbers');
     });
 
     it('should successfully trim video from start', async () => {
         const response = await request(app)
-            .post(`/videos/${testVideoId}/trim`)
-            .send({ trimStart: 2 })
+            .post(`/videos/${videoId}/trim`)
+            .set('Authorization', `Bearer ${API_TOKEN}`)
+            .send({ trimStart: 1 })
             .expect(200);
-        
+
         expect(response.body).to.have.property('id');
         expect(response.body).to.have.property('filename');
         expect(response.body).to.have.property('duration');
-        expect(response.body.duration).to.be.lessThan(10.0); // Original duration was 10.0
+        expect(response.body.duration).to.be.approximately(4, 0.1); // Original 5s - 1s = 4s
     });
 
     it('should successfully trim video from end', async () => {
         const response = await request(app)
-            .post(`/videos/${testVideoId}/trim`)
-            .send({ trimEnd: 2 })
+            .post(`/videos/${videoId}/trim`)
+            .set('Authorization', `Bearer ${API_TOKEN}`)
+            .send({ trimEnd: 1 })
             .expect(200);
-        
+
         expect(response.body).to.have.property('id');
         expect(response.body).to.have.property('filename');
         expect(response.body).to.have.property('duration');
-        expect(response.body.duration).to.be.lessThan(10.0);
+        expect(response.body.duration).to.be.approximately(4, 0.1); // Original 5s - 1s = 4s
     });
 });

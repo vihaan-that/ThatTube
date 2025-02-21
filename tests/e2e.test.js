@@ -4,11 +4,13 @@ const path = require('path');
 const fs = require('fs');
 const app = require('../app');
 const { getDb } = require('../db');
+const { VALID_API_TOKENS } = require('../middleware/auth');
 
 describe('End-to-End Video Processing Flow', () => {
     let uploadedVideoId1;
     let uploadedVideoId2;
     let shareToken;
+    const API_TOKEN = Array.from(VALID_API_TOKENS)[0];
 
     before(async function() {
         this.timeout(10000); // Increase timeout for setup
@@ -20,10 +22,26 @@ describe('End-to-End Video Processing Flow', () => {
         }
     });
 
+    it('should reject requests without authentication', async () => {
+        await request(app)
+            .post('/upload')
+            .attach('video', path.join(__dirname, 'fixtures', 'test-video1.raw'))
+            .expect(401);
+    });
+
+    it('should reject requests with invalid authentication', async () => {
+        await request(app)
+            .post('/upload')
+            .set('Authorization', 'Bearer invalid-token')
+            .attach('video', path.join(__dirname, 'fixtures', 'test-video1.raw'))
+            .expect(403);
+    });
+
     it('should upload two test videos successfully', async () => {
         // Upload first video
         const response1 = await request(app)
             .post('/upload')
+            .set('Authorization', `Bearer ${API_TOKEN}`)
             .attach('video', path.join(__dirname, 'fixtures', 'test-video1.raw'))
             .expect(200);
 
@@ -34,6 +52,7 @@ describe('End-to-End Video Processing Flow', () => {
         // Upload second video
         const response2 = await request(app)
             .post('/upload')
+            .set('Authorization', `Bearer ${API_TOKEN}`)
             .attach('video', path.join(__dirname, 'fixtures', 'test-video2.raw'))
             .expect(200);
 
@@ -48,6 +67,7 @@ describe('End-to-End Video Processing Flow', () => {
         it('should trim the first uploaded video', async () => {
             const response = await request(app)
                 .post(`/videos/${uploadedVideoId1}/trim`)
+                .set('Authorization', `Bearer ${API_TOKEN}`)
                 .send({
                     trimStart: 1,
                     trimEnd: 1
@@ -63,6 +83,7 @@ describe('End-to-End Video Processing Flow', () => {
         it('should create a share link for the trimmed video', async () => {
             const response = await request(app)
                 .post(`/videos/${trimmedVideoId}/share`)
+                .set('Authorization', `Bearer ${API_TOKEN}`)
                 .send({ expiryHours: 24 })
                 .expect(200);
 
@@ -71,7 +92,7 @@ describe('End-to-End Video Processing Flow', () => {
             shareToken = response.body.shareUrl.split('/').pop();
         });
 
-        it('should successfully access the shared trimmed video', async () => {
+        it('should successfully access the shared trimmed video without authentication', async () => {
             const response = await request(app)
                 .get(`/videos/share/${shareToken}`)
                 .expect(200);
@@ -87,6 +108,7 @@ describe('End-to-End Video Processing Flow', () => {
         it('should merge the two uploaded videos', async () => {
             const response = await request(app)
                 .post('/videos/merge')
+                .set('Authorization', `Bearer ${API_TOKEN}`)
                 .send({ videoIds: [uploadedVideoId1, uploadedVideoId2] })
                 .expect(200);
 
@@ -99,6 +121,7 @@ describe('End-to-End Video Processing Flow', () => {
         it('should create a share link for the merged video', async () => {
             const response = await request(app)
                 .post(`/videos/${mergedVideoId}/share`)
+                .set('Authorization', `Bearer ${API_TOKEN}`)
                 .send({ expiryHours: 48 })
                 .expect(200);
 
@@ -107,7 +130,7 @@ describe('End-to-End Video Processing Flow', () => {
             shareToken = response.body.shareUrl.split('/').pop();
         });
 
-        it('should successfully access the shared merged video', async () => {
+        it('should successfully access the shared merged video without authentication', async () => {
             const response = await request(app)
                 .get(`/videos/share/${shareToken}`)
                 .expect(200);
