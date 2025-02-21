@@ -4,7 +4,6 @@ const path = require('path');
 const fs = require('fs');
 const app = require('../app');
 const { getDb } = require('../db');
-const { processVideo } = require('../videoProcessing');
 
 describe('POST /videos/:id/trim', () => {
     let testVideoId;
@@ -14,15 +13,15 @@ describe('POST /videos/:id/trim', () => {
         const db = getDb();
         
         // Copy test video to uploads directory
-        const testVideoPath = path.join(__dirname, 'fixtures', 'test-video.mp4');
-        const uploadPath = path.join(__dirname, '../uploads', 'test-trim-video.mp4');
+        const testVideoPath = path.join(__dirname, 'fixtures', 'test-video.raw');
+        const uploadPath = path.join(__dirname, '../uploads', 'test-trim-video.raw');
         fs.copyFileSync(testVideoPath, uploadPath);
         
         // Insert test video record
         const result = db.prepare(`
             INSERT INTO videos (filename, filepath, size, duration)
             VALUES (?, ?, ?, ?)
-        `).run('test-trim-video.mp4', uploadPath, 1024, 10.0);
+        `).run('test-trim-video.raw', uploadPath, fs.statSync(uploadPath).size, 10.0);
         
         testVideoId = result.lastInsertRowid;
     });

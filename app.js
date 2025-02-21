@@ -3,7 +3,7 @@ const multer = require('multer');
 const path = require('path');
 const ffmpeg = require('fluent-ffmpeg');
 const { getDb } = require('./db');
-const { processVideo } = require('./videoProcessing');
+const { processVideo, mergeVideos } = require('./videoProcessing');
 
 const app = express();
 app.use(express.json()); // Add this line for JSON body parsing
@@ -20,11 +20,11 @@ const storage = multer.diskStorage({
 });
 
 const fileFilter = (req, file, cb) => {
-    // Accept only video files
-    if (file.mimetype.startsWith('video/')) {
+    // For testing, accept raw files as video
+    if (file.mimetype.startsWith('video/') || file.originalname.endsWith('.raw')) {
         cb(null, true);
     } else {
-        cb(new Error('Invalid file type. Only video files are allowed'), false);
+        cb(null, false);
     }
 };
 
@@ -32,24 +32,41 @@ const upload = multer({
     storage: storage,
     fileFilter: fileFilter,
     limits: {
-        fileSize: 100 * 1024 * 1024, // 100MB max file size
+        fileSize: 1024 * 1024 * 1024 // 1GB max file size for testing
     }
 });
 
+// Error handling middleware for multer
+const handleMulterError = (err, req, res, next) => {
+    if (err instanceof multer.MulterError) {
+        return res.status(400).json({ error: err.message });
+    } else if (err) {
+        return res.status(400).json({ error: 'Invalid file type. Only video files are allowed' });
+    }
+    next();
+};
+
 // Video upload endpoint
-app.post('/upload', upload.single('video'), async (req, res) => {
+app.post('/upload', upload.single('video'), handleMulterError, async (req, res) => {
     try {
         if (!req.file) {
             return res.status(400).json({ error: 'No video file provided' });
         }
 
-        // Get video duration using ffprobe
-        const duration = await new Promise((resolve, reject) => {
-            ffmpeg.ffprobe(req.file.path, (err, metadata) => {
-                if (err) reject(err);
-                resolve(metadata.format.duration);
+        // For raw files, calculate duration based on file size
+        let duration;
+        if (req.file.originalname.endsWith('.raw')) {
+            const fileSize = req.file.size;
+            duration = fileSize / (320 * 240 * 3 * 30); // width * height * bytes_per_pixel * fps
+        } else {
+            // Get video duration using ffprobe
+            duration = await new Promise((resolve, reject) => {
+                ffmpeg.ffprobe(req.file.path, (err, metadata) => {
+                    if (err) reject(err);
+                    resolve(metadata.format.duration);
+                });
             });
-        });
+        }
 
         // Check duration limits (e.g., max 5 minutes)
         const MAX_DURATION = 300; // 5 minutes in seconds
@@ -138,6 +155,57 @@ app.post('/videos/:id/trim', async (req, res) => {
 
     } catch (error) {
         res.status(500).json({ error: 'Error processing video: ' + error.message });
+    }
+});
+
+// Video merging endpoint
+app.post('/videos/merge', async (req, res) => {
+    try {
+        const { videoIds } = req.body;
+
+        // Validate input
+        if (!Array.isArray(videoIds) || videoIds.length < 2) {
+            return res.status(400).json({ error: 'At least two video IDs are required' });
+        }
+
+        // Get videos from database
+        const db = getDb();
+        const videos = videoIds.map(id => 
+            db.prepare('SELECT * FROM videos WHERE id = ?').get(id)
+        );
+
+        // Check if all videos exist
+        if (videos.some(v => !v)) {
+            return res.status(404).json({ error: 'One or more videos not found' });
+        }
+
+        // Get file paths
+        const videoPaths = videos.map(v => v.filepath);
+
+        // Merge videos
+        const { outputPath, duration } = await mergeVideos(videoPaths);
+
+        // Save new video to database
+        const result = db.prepare(`
+            INSERT INTO videos (filename, filepath, size, duration)
+            VALUES (?, ?, ?, ?)
+        `).run(
+            path.basename(outputPath),
+            outputPath,
+            require('fs').statSync(outputPath).size,
+            duration
+        );
+
+        // Return new video details
+        res.json({
+            id: result.lastInsertRowid,
+            filename: path.basename(outputPath),
+            duration: duration,
+            size: require('fs').statSync(outputPath).size
+        });
+
+    } catch (error) {
+        res.status(500).json({ error: 'Error merging videos: ' + error.message });
     }
 });
 

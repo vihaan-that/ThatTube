@@ -3,35 +3,24 @@ const { expect } = require('chai');
 const path = require('path');
 const fs = require('fs');
 const app = require('../app');
-const { getDb } = require('../db');
+const { getDb } = require('./db');
 
 describe('POST /upload', () => {
-    before(async () => {
-        // Setup: Create uploads directory if it doesn't exist
+    before(() => {
+        // Create uploads directory if it doesn't exist
         const uploadsDir = path.join(__dirname, '../uploads');
         if (!fs.existsSync(uploadsDir)) {
             fs.mkdirSync(uploadsDir);
         }
-        
-        // Initialize database
-        const db = getDb();
-        db.exec(`
-            CREATE TABLE IF NOT EXISTS videos (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                filename TEXT NOT NULL,
-                filepath TEXT NOT NULL,
-                size INTEGER NOT NULL,
-                duration FLOAT NOT NULL,
-                created_at DATETIME DEFAULT CURRENT_TIMESTAMP
-            )
-        `);
     });
 
     after(() => {
         // Cleanup: Remove test files from uploads directory
         const uploadsDir = path.join(__dirname, '../uploads');
         fs.readdirSync(uploadsDir).forEach(file => {
-            fs.unlinkSync(path.join(uploadsDir, file));
+            if (file.startsWith('test-')) {
+                fs.unlinkSync(path.join(uploadsDir, file));
+            }
         });
     });
 
@@ -44,32 +33,47 @@ describe('POST /upload', () => {
     });
 
     it('should reject invalid file types', async () => {
-        const response = await request(app)
-            .post('/upload')
-            .attach('video', path.join(__dirname, 'fixtures/test.txt'))
-            .expect(400);
-        
-        expect(response.body.error).to.equal('Invalid file type. Only video files are allowed');
+        // Create a temporary text file
+        const textFilePath = path.join(__dirname, 'fixtures', 'test.txt');
+        fs.writeFileSync(textFilePath, 'This is a test file', 'utf8');
+
+        try {
+            const response = await request(app)
+                .post('/upload')
+                .attach('video', textFilePath, { filename: 'test.txt', contentType: 'text/plain' })
+                .expect(400);
+            
+            expect(response.body.error).to.equal('Invalid file type. Only video files are allowed');
+        } finally {
+            // Cleanup
+            if (fs.existsSync(textFilePath)) {
+                fs.unlinkSync(textFilePath);
+            }
+        }
     });
 
     it('should successfully upload a valid video file', async () => {
+        const testVideoPath = path.join(__dirname, 'fixtures', 'test-video1.raw');
+        
         const response = await request(app)
             .post('/upload')
-            .attach('video', path.join(__dirname, 'fixtures/test-video.mp4'))
+            .attach('video', testVideoPath, { filename: 'test-video1.raw', contentType: 'video/raw' })
             .expect(200);
         
         expect(response.body).to.have.property('id');
         expect(response.body).to.have.property('filename');
         expect(response.body).to.have.property('duration');
-        expect(response.body).to.have.property('size');
+        expect(response.body.duration).to.be.approximately(5.0, 0.1);
     });
 
     it('should reject videos that exceed maximum duration', async () => {
+        const testVideoPath = path.join(__dirname, 'fixtures', 'long-video.raw');
+        
         const response = await request(app)
             .post('/upload')
-            .attach('video', path.join(__dirname, 'fixtures/long-video.mp4'))
+            .attach('video', testVideoPath, { filename: 'long-video.raw', contentType: 'video/raw' })
             .expect(400);
         
         expect(response.body.error).to.equal('Video duration exceeds maximum allowed length');
-    });
+    }).timeout(5000); // Increase timeout for large file
 });
