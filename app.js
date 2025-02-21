@@ -214,4 +214,76 @@ app.post('/videos/merge', async (req, res) => {
     }
 });
 
+// Share video endpoint
+app.post('/videos/:id/share', async (req, res) => {
+    try {
+        const videoId = req.params.id;
+        const { expiryHours = 24 } = req.body; // Default 24 hours expiry
+
+        // Get video from database
+        const db = getDb();
+        const video = db.prepare('SELECT * FROM videos WHERE id = ?').get(videoId);
+
+        if (!video) {
+            return res.status(404).json({ error: 'Video not found' });
+        }
+
+        // Generate unique token (using timestamp and random string)
+        const token = `${Date.now()}-${Math.random().toString(36).substring(2)}`;
+
+        // Calculate expiry timestamp
+        const expiryTimestamp = new Date();
+        expiryTimestamp.setHours(expiryTimestamp.getHours() + expiryHours);
+
+        // Save share link in database
+        db.prepare(`
+            INSERT INTO share_links (video_id, token, expiry_timestamp)
+            VALUES (?, ?, ?)
+        `).run(videoId, token, expiryTimestamp.toISOString());
+
+        // Return share URL and expiry timestamp
+        res.json({
+            shareUrl: `/videos/share/${token}`,
+            expiryTimestamp: expiryTimestamp.toISOString()
+        });
+    } catch (error) {
+        console.error('Error creating share link:', error);
+        res.status(500).json({ error: 'Internal server error' });
+    }
+});
+
+// Get shared video endpoint
+app.get('/videos/share/:token', async (req, res) => {
+    try {
+        const token = req.params.token;
+
+        // Get share link from database
+        const db = getDb();
+        const shareLink = db.prepare(`
+            SELECT share_links.*, videos.* 
+            FROM share_links 
+            JOIN videos ON videos.id = share_links.video_id
+            WHERE token = ? AND datetime(expiry_timestamp) > datetime('now')
+        `).get(token);
+
+        if (!shareLink) {
+            return res.status(404).json({ error: 'Share link not found or expired' });
+        }
+
+        // Set appropriate headers
+        res.setHeader('Content-Type', 'video/raw');
+        res.setHeader(
+            'Content-Disposition',
+            `attachment; filename="${shareLink.filename}"`
+        );
+
+        // Stream the video file
+        const fileStream = fs.createReadStream(shareLink.filepath);
+        fileStream.pipe(res);
+    } catch (error) {
+        console.error('Error serving shared video:', error);
+        res.status(500).json({ error: 'Internal server error' });
+    }
+});
+
 module.exports = app;
