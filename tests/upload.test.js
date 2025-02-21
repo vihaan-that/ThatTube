@@ -3,7 +3,7 @@ const { expect } = require('chai');
 const path = require('path');
 const fs = require('fs');
 const app = require('../app');
-const { getDb } = require('./db');
+const { getDb } = require('../db');
 
 describe('POST /upload', () => {
     before(() => {

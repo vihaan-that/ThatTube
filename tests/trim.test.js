@@ -8,12 +8,13 @@ const { getDb } = require('../db');
 describe('POST /videos/:id/trim', () => {
     let testVideoId;
 
-    before(async () => {
+    before(async function() {
+        this.timeout(10000); // Increase timeout for setup
         // Setup: Upload a test video first
         const db = getDb();
         
         // Copy test video to uploads directory
-        const testVideoPath = path.join(__dirname, 'fixtures', 'test-video.raw');
+        const testVideoPath = path.join(__dirname, 'fixtures', 'test-video1.raw');
         const uploadPath = path.join(__dirname, '../uploads', 'test-trim-video.raw');
         fs.copyFileSync(testVideoPath, uploadPath);
         

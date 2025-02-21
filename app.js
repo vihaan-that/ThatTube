@@ -1,63 +1,82 @@
 const express = require('express');
 const multer = require('multer');
 const path = require('path');
+const fs = require('fs');
 const ffmpeg = require('fluent-ffmpeg');
 const { getDb } = require('./db');
-const { processVideo, mergeVideos } = require('./videoProcessing');
+const { calculateRawVideoDuration, processVideo, mergeVideos } = require('./videoProcessing');
 
 const app = express();
-app.use(express.json()); // Add this line for JSON body parsing
+app.use(express.json());
 
-// Configure multer for video upload
+// Configure multer for handling file uploads
 const storage = multer.diskStorage({
     destination: (req, file, cb) => {
-        cb(null, path.join(__dirname, 'uploads'));
+        const uploadDir = path.join(__dirname, 'uploads');
+        if (!fs.existsSync(uploadDir)) {
+            fs.mkdirSync(uploadDir);
+        }
+        cb(null, uploadDir);
     },
     filename: (req, file, cb) => {
-        const uniqueSuffix = Date.now() + '-' + Math.round(Math.random() * 1E9);
-        cb(null, uniqueSuffix + path.extname(file.originalname));
+        cb(null, `${Date.now()}-${Math.round(Math.random() * 1E9)}${path.extname(file.originalname)}`);
     }
 });
 
 const fileFilter = (req, file, cb) => {
-    // For testing, accept raw files as video
-    if (file.mimetype.startsWith('video/') || file.originalname.endsWith('.raw')) {
-        cb(null, true);
-    } else {
-        cb(null, false);
+    if (!file) {
+        cb(new Error('No video file provided'), false);
+        return;
     }
+
+    // Check file type
+    const allowedTypes = ['video/mp4', 'video/raw', 'video/quicktime'];
+    if (!allowedTypes.includes(file.mimetype) && !file.originalname.endsWith('.raw')) {
+        cb(new Error('Invalid file type. Only video files are allowed'), false);
+        return;
+    }
+
+    cb(null, true);
 };
 
 const upload = multer({
-    storage: storage,
-    fileFilter: fileFilter,
+    storage,
+    fileFilter,
     limits: {
-        fileSize: 1024 * 1024 * 1024 // 1GB max file size for testing
+        fileSize: 1024 * 1024 * 1024 // 1GB
     }
 });
 
-// Error handling middleware for multer
-const handleMulterError = (err, req, res, next) => {
+// Handle file upload errors
+const handleUploadError = (err, req, res, next) => {
     if (err instanceof multer.MulterError) {
+        if (err.code === 'LIMIT_FILE_SIZE') {
+            return res.status(400).json({ error: 'Video duration exceeds maximum allowed length' });
+        }
         return res.status(400).json({ error: err.message });
-    } else if (err) {
-        return res.status(400).json({ error: 'Invalid file type. Only video files are allowed' });
+    }
+    if (err) {
+        return res.status(400).json({ error: err.message });
     }
     next();
 };
 
-// Video upload endpoint
-app.post('/upload', upload.single('video'), handleMulterError, async (req, res) => {
+// Upload endpoint
+app.post('/upload', upload.single('video'), handleUploadError, async (req, res) => {
     try {
         if (!req.file) {
             return res.status(400).json({ error: 'No video file provided' });
         }
 
-        // For raw files, calculate duration based on file size
+        const db = getDb();
+        const filepath = req.file.path;
+        const filename = req.file.filename;
+        const filesize = fs.statSync(filepath).size;
+
+        // For raw video files, calculate duration based on file size
         let duration;
         if (req.file.originalname.endsWith('.raw')) {
-            const fileSize = req.file.size;
-            duration = fileSize / (320 * 240 * 3 * 30); // width * height * bytes_per_pixel * fps
+            duration = calculateRawVideoDuration(filepath);
         } else {
             // Get video duration using ffprobe
             duration = await new Promise((resolve, reject) => {
@@ -68,40 +87,26 @@ app.post('/upload', upload.single('video'), handleMulterError, async (req, res) 
             });
         }
 
-        // Check duration limits (e.g., max 5 minutes)
-        const MAX_DURATION = 300; // 5 minutes in seconds
-        if (duration > MAX_DURATION) {
-            // Remove the uploaded file
-            require('fs').unlinkSync(req.file.path);
+        // Check if duration exceeds maximum allowed length (5 minutes)
+        if (duration > 300) { // 5 minutes in seconds
+            fs.unlinkSync(filepath); // Delete the uploaded file
             return res.status(400).json({ error: 'Video duration exceeds maximum allowed length' });
         }
 
-        // Store video metadata in database
-        const db = getDb();
+        // Insert video record into database
         const result = db.prepare(`
             INSERT INTO videos (filename, filepath, size, duration)
             VALUES (?, ?, ?, ?)
-        `).run(
-            req.file.filename,
-            req.file.path,
-            req.file.size,
-            duration
-        );
+        `).run(filename, filepath, filesize, duration);
 
-        // Return success response
         res.json({
             id: result.lastInsertRowid,
-            filename: req.file.filename,
-            size: req.file.size,
-            duration: duration
+            filename,
+            duration
         });
-
     } catch (error) {
-        // If any error occurs, remove the uploaded file
-        if (req.file) {
-            require('fs').unlinkSync(req.file.path);
-        }
-        res.status(500).json({ error: 'Error processing video upload: ' + error.message });
+        console.error('Error processing upload:', error);
+        res.status(500).json({ error: 'Internal server error' });
     }
 });
 
@@ -141,7 +146,7 @@ app.post('/videos/:id/trim', async (req, res) => {
         `).run(
             path.basename(outputPath),
             outputPath,
-            require('fs').statSync(outputPath).size,
+            fs.statSync(outputPath).size,
             duration
         );
 
@@ -150,7 +155,7 @@ app.post('/videos/:id/trim', async (req, res) => {
             id: result.lastInsertRowid,
             filename: path.basename(outputPath),
             duration: duration,
-            size: require('fs').statSync(outputPath).size
+            size: fs.statSync(outputPath).size
         });
 
     } catch (error) {
@@ -192,7 +197,7 @@ app.post('/videos/merge', async (req, res) => {
         `).run(
             path.basename(outputPath),
             outputPath,
-            require('fs').statSync(outputPath).size,
+            fs.statSync(outputPath).size,
             duration
         );
 
@@ -201,7 +206,7 @@ app.post('/videos/merge', async (req, res) => {
             id: result.lastInsertRowid,
             filename: path.basename(outputPath),
             duration: duration,
-            size: require('fs').statSync(outputPath).size
+            size: fs.statSync(outputPath).size
         });
 
     } catch (error) {

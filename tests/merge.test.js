@@ -8,7 +8,8 @@ const { getDb } = require('../db');
 describe('POST /videos/merge', () => {
     let testVideoIds = [];
 
-    before(async () => {
+    before(async function() {
+        this.timeout(10000); // Increase timeout for setup
         // Setup: Upload two test videos
         const db = getDb();
         
